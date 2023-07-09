@@ -38,9 +38,15 @@ default_template = """
 from __future__ import annotations
 from datetime import datetime, date
 from enum import Enum
-from typing import List, Dict, Optional, Any, Union, Literal
+from typing import List, Dict, Optional, Any, Union
 from pydantic import BaseModel as BaseModel, Field
 from linkml_runtime.linkml_model import Decimal
+import sys
+if sys.version_info >= (3, 8):
+    from typing import Literal
+else:
+    from typing_extensions import Literal
+
 
 metamodel_version = "{{metamodel_version}}"
 version = "{{version if version else None}}"
@@ -64,8 +70,11 @@ class {{ e.name }}(str, Enum):
     {{ e.description }}
     \"\"\"
     {%- endif %}
-    {% for label, value in e['values'].items() -%}
-    {{label}} = "{{value}}"
+    {% for _, pv in e['values'].items() -%}
+    {% if pv.description -%}
+    # {{pv.description}}
+    {%- endif %}
+    {{pv.label}} = "{{pv.value}}"
     {% endfor %}
     {% if not e['values'] -%}
     dummy = "dummy"
@@ -124,7 +133,7 @@ def _get_pyrange(t: TypeDefinition, sv: SchemaView) -> str:
     if pyrange is None and t.typeof is not None:
         pyrange = _get_pyrange(sv.get_type(t.typeof), sv)
     if pyrange is None:
-        raise Exception(f"No python type for range: {s.range} // {t}")
+        raise Exception(f"No python type for range: {t.name} // {t}")
     return pyrange
 
 
@@ -164,22 +173,6 @@ class PydanticGenerator(OOCodeGenerator):
             logging.error(f"Code:\n{pycode}")
             logging.error(f"Error compiling generated python code: {e}")
             raise e
-
-    def generate_enums(
-        self, all_enums: Dict[EnumDefinitionName, EnumDefinition]
-    ) -> Dict[str, dict]:
-        # TODO: make an explicit class to represent how an enum is passed to the template
-        enums = {}
-        for enum_name, enum_original in all_enums.items():
-            enum = {"name": camelcase(enum_name), "values": {}}
-
-            for pv in enum_original.permissible_values.values():
-                label = self.generate_enum_label(pv.text)
-                enum["values"][label] = pv.text.replace('"', '\\"')
-
-            enums[enum_name] = enum
-
-        return enums
 
     def sort_classes(self, clist: List[ClassDefinition]) -> List[ClassDefinition]:
         """
@@ -466,8 +459,6 @@ class PydanticGenerator(OOCodeGenerator):
         return None
 
     def serialize(self) -> str:
-        sv = self.schemaview
-
         if self.template_file is not None:
             with open(self.template_file) as template_file:
                 template_obj = Template(template_file.read())
@@ -517,7 +508,9 @@ class PydanticGenerator(OOCodeGenerator):
 
                 slot_ranges: List[str] = []
 
-                if len(s.any_of) > 0 and s.range is not None:
+                # Confirm that the original slot range (ignoring the default that comes in from
+                # induced_slot) isn't in addition to setting any_of
+                if len(s.any_of) > 0 and sv.get_slot(sn).range is not None:
                     raise ValueError("Slot cannot have both range and any_of defined")
 
                 if s.any_of is not None and len(s.any_of) > 0:
